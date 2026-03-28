@@ -5,6 +5,7 @@ const { Schema } = mongoose;
 const PROJECT_STATUS = ['open', 'in-progress', 'completed'];
 const MEMBER_STATUS = ['active', 'pending'];
 const APPLICATION_STATUS = ['pending', 'accepted', 'rejected', 'withdrawn', 'locked-in'];
+const COMPLETION_SUBMISSION_STATUS = ['not_submitted', 'submitted', 'approved', 'rejected'];
 const PAYMENT_STATUS = ['created', 'processing', 'succeeded', 'failed', 'cancelled'];
 const TRANSACTION_TYPE = [
   'purchase',
@@ -93,10 +94,20 @@ const ProjectApplicationSchema = new Schema(
     projectId: { type: Schema.Types.ObjectId, ref: 'Project', required: true, index: true },
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     status: { type: String, enum: APPLICATION_STATUS, default: 'pending' },
+    assignedRole: { type: String, trim: true, default: '' },
     commitmentTokens: { type: Number, default: 10, min: 0 },
     message: { type: String, trim: true, maxlength: 2000 },
+    completionSubmissionStatus: {
+      type: String,
+      enum: COMPLETION_SUBMISSION_STATUS,
+      default: 'not_submitted',
+    },
+    completionSubmissionNote: { type: String, trim: true, maxlength: 2500, default: '' },
+    reviewerNote: { type: String, trim: true, maxlength: 2500, default: '' },
     appliedAt: { type: Date, default: Date.now },
     respondedAt: { type: Date },
+    submittedAt: { type: Date },
+    reviewedAt: { type: Date },
   },
   { timestamps: true, versionKey: false }
 );

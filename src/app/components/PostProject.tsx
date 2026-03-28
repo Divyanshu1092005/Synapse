@@ -131,14 +131,18 @@ export function PostProject() {
 
   const handleSubmit = async () => {
     if (!validate()) return;
-    await publishProject({
-      title: form.title,
-      domain: form.domain,
-      description: form.description,
-      requiredRoles: form.requiredRoles,
-      tags: form.tags,
-    });
-    setPublished(true);
+    try {
+      await publishProject({
+        title: form.title,
+        domain: form.domain,
+        description: form.description,
+        requiredRoles: form.requiredRoles,
+        tags: form.tags,
+      });
+      setPublished(true);
+    } catch (_error) {
+      // Error toast is handled centrally in AppContext.publishProject.
+    }
   };
 
   if (published) {

@@ -56,6 +56,33 @@ export interface Milestone {
   completed: boolean;
 }
 
+export interface PendingApproval {
+  applicationId: string;
+  userId: string;
+  name: string;
+  role: string;
+  submittedAt: string;
+}
+
+export interface ApplicantQueueItem {
+  applicationId: string;
+  userId: string;
+  name: string;
+  role: string;
+  message: string;
+  appliedAt: string;
+}
+
+export interface ActiveContributorItem {
+  applicationId: string;
+  userId: string;
+  name: string;
+  role: string;
+  submissionStatus: 'not_submitted' | 'submitted' | 'approved' | 'rejected';
+  submittedAt: string;
+  status: 'accepted' | 'locked-in' | 'pending' | 'rejected' | 'withdrawn';
+}
+
 export interface ActiveProject {
   id: string;
   title: string;
@@ -69,6 +96,25 @@ export interface ActiveProject {
   deadline: string;
   tags: string[];
   milestones: Milestone[];
+  isOwner?: boolean;
+  applicationId?: string;
+  submissionStatus?: 'not_submitted' | 'submitted' | 'approved' | 'rejected';
+  pendingApprovals?: PendingApproval[];
+  applicantsQueue?: ApplicantQueueItem[];
+  activeContributors?: ActiveContributorItem[];
+}
+
+export interface ArchivedProject {
+  id: string;
+  projectId: string;
+  title: string;
+  domain: string;
+  role: string;
+  isOwner: boolean;
+  outcome: string;
+  rewardTokens: number;
+  completedOn: string;
+  tags: string[];
 }
 
 export interface Toast {

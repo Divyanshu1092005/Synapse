@@ -8,6 +8,11 @@ import React, {
 import confetti from 'canvas-confetti';
 import { User, Project, ActiveProject, Toast, TabType, ToastVariant } from '../types';
 import { INITIAL_USER, INITIAL_PROJECTS, INITIAL_ACTIVE_PROJECT } from '../data/mockData';
+import { updateCurrentUserProfile } from '../services/user';
+import {
+  applyToProject as applyToProjectApi,
+  createProject as createProjectApi,
+} from '../services/projects';
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -26,9 +31,11 @@ interface AppState {
 
 type Action =
   | { type: 'SET_TAB'; tab: TabType }
+  | { type: 'SET_PROJECTS'; projects: Project[] }
   | { type: 'SET_LOADING_PROJECT'; projectId: string; loading: boolean }
   | { type: 'APPLY_TO_PROJECT'; projectId: string }
   | { type: 'ADD_PROJECT'; project: Project }
+  | { type: 'HYDRATE_USER'; user: User }
   | { type: 'UPDATE_USER_PROFILE'; user: User }
   | { type: 'COMPLETE_MY_ROLE' }
   | { type: 'UPDATE_TOKENS'; delta: number }
@@ -36,12 +43,57 @@ type Action =
   | { type: 'REMOVE_TOAST'; id: string }
   | { type: 'SET_PUBLISHING'; value: boolean };
 
+function deriveInitials(name: string): string {
+  const letters = String(name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('');
+  return letters || 'U';
+}
+
+function normalizeUser(rawUser: Partial<User> | undefined): User {
+  const name = String(rawUser?.name || INITIAL_USER.name).trim();
+
+  const tokens = Number(rawUser?.tokens);
+  const completedProjects = Number(rawUser?.completedProjects);
+
+  return {
+    ...INITIAL_USER,
+    ...rawUser,
+    id: String(rawUser?.id || INITIAL_USER.id).trim(),
+    name,
+    role: String(rawUser?.role || INITIAL_USER.role).trim(),
+    initials: String(rawUser?.initials || deriveInitials(name))
+      .trim()
+      .toUpperCase()
+      .slice(0, 4),
+    tokens: Number.isFinite(tokens) ? Math.max(0, Math.round(tokens)) : INITIAL_USER.tokens,
+    university: String(rawUser?.university || INITIAL_USER.university).trim(),
+    department: String(rawUser?.department || INITIAL_USER.department).trim(),
+    bio: String(rawUser?.bio || INITIAL_USER.bio).trim(),
+    skills: Array.isArray(rawUser?.skills)
+      ? rawUser.skills.map((skill) => String(skill).trim()).filter(Boolean)
+      : INITIAL_USER.skills,
+    completedProjects: Number.isFinite(completedProjects)
+      ? Math.max(0, Math.round(completedProjects))
+      : INITIAL_USER.completedProjects,
+    joinDate: String(rawUser?.joinDate || INITIAL_USER.joinDate).trim(),
+  };
+}
+
 // ─── Reducer ─────────────────────────────────────────────────────────────────
 
+// Central state transition function for all app actions.
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'SET_TAB':
       return { ...state, activeTab: action.tab };
+
+    case 'SET_PROJECTS':
+      return { ...state, projects: action.projects };
 
     case 'SET_LOADING_PROJECT':
       return {
@@ -65,7 +117,12 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         projects: [action.project, ...state.projects],
-        user: { ...state.user, tokens: state.user.tokens - 10 },
+      };
+
+    case 'HYDRATE_USER':
+      return {
+        ...state,
+        user: action.user,
       };
 
     case 'UPDATE_USER_PROFILE':
@@ -112,7 +169,10 @@ function reducer(state: AppState, action: Action): AppState {
 
 interface AppContextType extends AppState {
   setTab: (tab: TabType) => void;
-  updateUserProfile: (user: User) => void;
+  setProjects: (projects: Project[]) => void;
+  hydrateUser: (user: Partial<User>) => void;
+  updateUserBio: (bio: string) => Promise<void>;
+  updateUserProfile: (user: User) => Promise<void>;
   applyToProject: (projectId: string) => Promise<void>;
   publishProject: (data: {
     title: string;
@@ -134,6 +194,7 @@ let toastIdCounter = 0;
 
 // ─── Provider ────────────────────────────────────────────────────────────────
 
+// Provides global app state and action handlers to the component tree.
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, {
     user: INITIAL_USER,
@@ -146,6 +207,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     isPublishing: false,
   });
 
+  // Creates a toast, queues it in state, and auto-removes it after a duration.
   const addToast = useCallback(
     (
       variant: ToastVariant,
@@ -161,18 +223,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  // Switches the active app tab (feed, dashboard, post, etc).
   const setTab = useCallback((tab: TabType) => {
     dispatch({ type: 'SET_TAB', tab });
   }, []);
 
+  const setProjects = useCallback((projects: Project[]) => {
+    dispatch({ type: 'SET_PROJECTS', projects });
+  }, []);
+
+  // Hydrates the app user state from session/backend payloads.
+  const hydrateUser = useCallback((user: Partial<User>) => {
+    dispatch({ type: 'HYDRATE_USER', user: normalizeUser(user) });
+  }, []);
+
+  // Saves updated user profile values into global state and confirms via toast.
+  const updateUserBio = useCallback(async (bio: string) => {
+    const result = await updateCurrentUserProfile({ bio });
+    dispatch({ type: 'UPDATE_USER_PROFILE', user: normalizeUser(result.user) });
+  }, []);
+
+  // Saves updated user profile values into global state and confirms via toast.
   const updateUserProfile = useCallback(
-    (user: User) => {
-      dispatch({ type: 'UPDATE_USER_PROFILE', user });
-      addToast('success', 'Profile Updated', 'Your profile details were saved successfully.');
+    async (user: User) => {
+      try {
+        const payload = normalizeUser(user);
+        const result = await updateCurrentUserProfile(payload);
+        dispatch({ type: 'UPDATE_USER_PROFILE', user: normalizeUser(result.user) });
+        addToast('success', 'Profile Updated', 'Your profile details were saved successfully.');
+      } catch (error) {
+        addToast(
+          'error',
+          'Profile Update Failed',
+          error instanceof Error ? error.message : 'Unable to save profile right now.'
+        );
+        throw error;
+      }
     },
     [addToast]
   );
 
+  // Applies current user to a project after token and duplicate checks.
   const applyToProject = useCallback(
     async (projectId: string) => {
       // Get the current state inline to check tokens at call time
@@ -191,24 +282,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (state.appliedProjectIds.includes(projectId)) return;
 
       dispatch({ type: 'SET_LOADING_PROJECT', projectId, loading: true });
-
-      // Simulate network delay
-      await new Promise((res) => setTimeout(res, 1400));
-
-      dispatch({ type: 'SET_LOADING_PROJECT', projectId, loading: false });
-      dispatch({ type: 'APPLY_TO_PROJECT', projectId });
-
-      const project = state.projects.find((p) => p.id === projectId);
-      addToast(
-        'success',
-        'Application Submitted!',
-        `You applied to "${project?.title ?? 'project'}". Your commitment is noted.`,
-        -10
-      );
+      try {
+        const response = await applyToProjectApi(projectId);
+        dispatch({ type: 'APPLY_TO_PROJECT', projectId });
+        dispatch({ type: 'UPDATE_USER_PROFILE', user: normalizeUser(response.user) });
+        addToast(
+          'success',
+          'Application Submitted!',
+          `You applied to "${response.project?.title ?? 'project'}". Awaiting publisher selection.`,
+          response.tokenDelta
+        );
+      } catch (error) {
+        addToast(
+          'error',
+          'Application Failed',
+          error instanceof Error ? error.message : 'Unable to apply right now.'
+        );
+      } finally {
+        dispatch({ type: 'SET_LOADING_PROJECT', projectId, loading: false });
+      }
     },
-    [state.user.tokens, state.appliedProjectIds, state.projects, addToast]
+    [state.user.tokens, state.appliedProjectIds, addToast]
   );
 
+  // Publishes a new project after validating token balance, then debits tokens.
   const publishProject = useCallback(
     async (data: {
       title: string;
@@ -225,41 +322,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
           undefined,
           5000
         );
-        return;
+        throw new Error('Insufficient tokens.');
       }
 
       dispatch({ type: 'SET_PUBLISHING', value: true });
-      await new Promise((res) => setTimeout(res, 1600));
-      dispatch({ type: 'SET_PUBLISHING', value: false });
-
-      const newProject: Project = {
-        id: `proj-user-${Date.now()}`,
-        title: data.title,
-        domain: data.domain,
-        description: data.description,
-        requiredRoles: data.requiredRoles,
-        status: 'open',
-        creator: state.user.name,
-        creatorRole: state.user.role,
-        costToApply: 10,
-        applicants: 0,
-        deadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        tags: data.tags,
-        maxTeamSize: data.requiredRoles.length + 1,
-        featured: false,
-      };
-
-      dispatch({ type: 'ADD_PROJECT', project: newProject });
-      addToast(
-        'success',
-        'Project Published!',
-        `"${data.title}" is now live in the feed. Researchers can apply.`,
-        -10
-      );
+      try {
+        const response = await createProjectApi(data);
+        dispatch({ type: 'ADD_PROJECT', project: response.project });
+        dispatch({ type: 'UPDATE_USER_PROFILE', user: normalizeUser(response.user) });
+        addToast(
+          'success',
+          'Project Published!',
+          `"${data.title}" is now live in the feed. Researchers can apply.`,
+          response.tokenDelta
+        );
+      } catch (error) {
+        addToast(
+          'error',
+          'Publish Failed',
+          error instanceof Error ? error.message : 'Unable to publish project right now.'
+        );
+        throw error;
+      } finally {
+        dispatch({ type: 'SET_PUBLISHING', value: false });
+      }
     },
-    [state.user.tokens, state.user.name, state.user.role, addToast]
+    [state.user.tokens, addToast]
   );
 
+  // Simulates checkout flow and credits purchased tokens to the user.
   const purchaseTokens = useCallback(
     async (amount: number) => {
       // Simulate backend payment intent creation
@@ -279,6 +370,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [addToast]
   );
 
+  // Marks the user's role as complete, updates progress, rewards tokens, and celebrates.
   const completeMyRole = useCallback(() => {
     dispatch({ type: 'COMPLETE_MY_ROLE' });
 
@@ -299,6 +391,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
   }, [addToast]);
 
+  // Removes a toast immediately (used by close button and timeout).
   const dismissToast = useCallback((id: string) => {
     dispatch({ type: 'REMOVE_TOAST', id });
   }, []);
@@ -308,6 +401,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       value={{
         ...state,
         setTab,
+        setProjects,
+        hydrateUser,
+        updateUserBio,
         updateUserProfile,
         applyToProject,
         publishProject,
@@ -321,6 +417,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// Convenience hook that exposes app state/actions and guards provider usage.
 export function useApp(): AppContextType {
   const ctx = useContext(AppContext);
   if (!ctx) throw new Error('useApp must be used within AppProvider');

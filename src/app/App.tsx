@@ -8,32 +8,63 @@ import { Tokens } from './components/Tokens';
 import { UserProfile } from './components/User';
 import { AuthSession, LandingPage } from './components/LandingPage';
 import { ToastContainer } from './components/ToastContainer';
+import {
+  clearStoredSession,
+  fetchCurrentUser,
+  getStoredAccessToken,
+  persistSession,
+} from './services/auth';
 
 function AppShell() {
-  const { activeTab, toasts, dismissToast, setTab } = useApp();
+  const { activeTab, toasts, dismissToast, setTab, hydrateUser } = useApp();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isBootstrappingSession, setIsBootstrappingSession] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem('synapse_access_token');
-    setIsAuthenticated(Boolean(token));
-  }, []);
+    let isMounted = true;
 
-  const handleAuthenticated = (session: AuthSession, persistSession: boolean) => {
-    if (persistSession) {
-      localStorage.setItem('synapse_access_token', session.accessToken);
-      localStorage.setItem('synapse_refresh_token', session.refreshToken);
-      localStorage.setItem('synapse_permissions', JSON.stringify(session.permissions));
-      localStorage.setItem('synapse_session_user', JSON.stringify(session.user));
-    } else {
-      localStorage.removeItem('synapse_access_token');
-      localStorage.removeItem('synapse_refresh_token');
-      localStorage.removeItem('synapse_permissions');
-      localStorage.removeItem('synapse_session_user');
-    }
+    const bootstrapSession = async () => {
+      const token = getStoredAccessToken();
+      if (!token) {
+        if (isMounted) {
+          setIsAuthenticated(false);
+          setIsBootstrappingSession(false);
+        }
+        return;
+      }
 
+      try {
+        const response = await fetchCurrentUser(token);
+        if (!isMounted) return;
+
+        hydrateUser(response.user);
+        setIsAuthenticated(true);
+      } catch (_error) {
+        clearStoredSession();
+        if (!isMounted) return;
+        setIsAuthenticated(false);
+      } finally {
+        if (isMounted) setIsBootstrappingSession(false);
+      }
+    };
+
+    bootstrapSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [hydrateUser]);
+
+  const handleAuthenticated = (session: AuthSession, persistInLocalStorage: boolean) => {
+    persistSession(session, persistInLocalStorage);
+    hydrateUser(session.user);
     setIsAuthenticated(true);
     setTab('dashboard');
   };
+
+  if (isBootstrappingSession) {
+    return <div className="min-h-screen bg-[#F5F7FA]" />;
+  }
 
   if (!isAuthenticated) {
     return (
@@ -56,7 +87,6 @@ function AppShell() {
         {activeTab === 'user' && <UserProfile />}
       </main>
 
-      {/* Footer */}
       <footer className="fixed bottom-0 left-0 right-0 z-30 pointer-events-none">
         <div className="max-w-7xl mx-auto px-4">
           <div

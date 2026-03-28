@@ -1,19 +1,33 @@
-import express from 'express';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
+import app from './app.js';
+import cors from 'cors';
+
+
+app.use(cors({
+  origin: 'http://localhost:5174',
+  credentials: true
+}));
 
 dotenv.config();
-const app = express();
 
-app.use(cors({ origin: process.env.CLIENT_ORIGIN, credentials: true }));
-app.use(express.json());
+const PORT = Number(process.env.PORT || 5000);
+const MONGODB_URI = process.env.MONGODB_URI;
 
-app.get('/api/health', (_, res) => res.json({ ok: true }));
+if (!MONGODB_URI) {
+  throw new Error('MONGODB_URI is missing in server/.env');
+}
 
-await mongoose.connect(process.env.MONGODB_URI);
-console.log('MongoDB connected');
+async function start() {
+  await mongoose.connect(MONGODB_URI);
+  console.log('MongoDB connected');
 
-app.listen(process.env.PORT || 5000, () => {
-  console.log(`API running on port ${process.env.PORT || 5000}`);
+  app.listen(PORT, () => {
+    console.log(`API running on port ${PORT}`);
+  });
+}
+
+start().catch((error) => {
+  console.error('Failed to start server:', error);
+  process.exit(1);
 });

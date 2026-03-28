@@ -1,4 +1,4 @@
-import React, { KeyboardEvent, useEffect, useMemo, useState } from 'react';
+import React, { KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   Briefcase,
@@ -6,6 +6,7 @@ import {
   Calendar,
   Coins,
   GraduationCap,
+  LogOut,
   Loader2,
   PencilLine,
   Save,
@@ -15,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { useApp } from '../store/AppContext';
+import { clearStoredSession } from '../services/auth';
 import { User as AppUser } from '../types';
 
 interface ProfileForm {
@@ -36,6 +38,7 @@ type ProfileErrors = Partial<Record<keyof ProfileForm, string>>;
 const INPUT_STYLES =
   'w-full px-4 py-3 rounded-xl border border-gray-200 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#17A2B8]/30 focus:border-[#17A2B8] transition-all bg-[#F5F7FA]';
 
+// Maps app user data into editable string-based form values.
 function buildProfileForm(user: AppUser): ProfileForm {
   return {
     id: user.id,
@@ -52,6 +55,7 @@ function buildProfileForm(user: AppUser): ProfileForm {
   };
 }
 
+// Creates avatar initials from the first two words of a full name.
 function deriveInitials(name: string): string {
   const letters = name
     .trim()
@@ -63,29 +67,60 @@ function deriveInitials(name: string): string {
   return letters || 'U';
 }
 
+// Profile management screen for viewing and editing user account details.
 export function UserProfile() {
-  const { user, setTab, updateUserProfile } = useApp();
+  const { user, setTab, updateUserProfile, updateUserBio } = useApp();
   const [form, setForm] = useState<ProfileForm>(() => buildProfileForm(user));
   const [skillInput, setSkillInput] = useState('');
   const [errors, setErrors] = useState<ProfileErrors>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [bioSaveState, setBioSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [bioSaveError, setBioSaveError] = useState('');
+  const lastPersistedBioRef = useRef(user.bio);
 
+  // Keeps local form state in sync when global user data changes.
   useEffect(() => {
     setForm(buildProfileForm(user));
+    lastPersistedBioRef.current = user.bio;
+    setBioSaveState('idle');
+    setBioSaveError('');
   }, [user]);
 
+  // Auto-saves bio edits to MongoDB after a short debounce.
+  useEffect(() => {
+    if (form.bio === lastPersistedBioRef.current) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        setBioSaveState('saving');
+        setBioSaveError('');
+        await updateUserBio(form.bio);
+        lastPersistedBioRef.current = form.bio.trim();
+        setBioSaveState('saved');
+      } catch (error) {
+        setBioSaveState('error');
+        setBioSaveError(error instanceof Error ? error.message : 'Failed to save bio.');
+      }
+    }, 700);
+
+    return () => clearTimeout(timer);
+  }, [form.bio, updateUserBio]);
+
+  // Detects whether any local field has changed from the current user profile.
   const hasChanges = useMemo(() => {
     const current = buildProfileForm(user);
     return JSON.stringify(current) !== JSON.stringify(form);
   }, [form, user]);
 
+  // Updates a specific form field and clears field-level errors/success state.
   const updateField = (field: keyof ProfileForm, value: string | string[]) => {
     setForm((prev) => ({ ...prev, [field]: value }));
     setErrors((prev) => ({ ...prev, [field]: undefined }));
     setSaved(false);
   };
 
+  // Adds a new unique skill from input to the form skill list.
   const addSkill = () => {
     const value = skillInput.trim();
     if (!value || form.skills.includes(value)) {
@@ -96,6 +131,7 @@ export function UserProfile() {
     setSkillInput('');
   };
 
+  // Removes a selected skill from the form skill list.
   const removeSkill = (skill: string) => {
     updateField(
       'skills',
@@ -103,6 +139,7 @@ export function UserProfile() {
     );
   };
 
+  // Allows adding a skill by pressing Enter in the skill input box.
   const handleSkillKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -110,6 +147,7 @@ export function UserProfile() {
     }
   };
 
+  // Validates the full profile form and stores errors for inline rendering.
   const validate = () => {
     const nextErrors: ProfileErrors = {};
     const tokens = Number(form.tokens);
@@ -140,6 +178,7 @@ export function UserProfile() {
     return Object.keys(nextErrors).length === 0;
   };
 
+  // Resets local edits and errors back to the currently saved user values.
   const handleCancel = () => {
     setForm(buildProfileForm(user));
     setSkillInput('');
@@ -147,28 +186,38 @@ export function UserProfile() {
     setSaved(false);
   };
 
+  // Validates and persists profile changes to shared app state.
   const handleSave = async () => {
     if (!validate()) return;
 
     setSaving(true);
     await new Promise((res) => setTimeout(res, 500));
 
-    updateUserProfile({
-      id: form.id.trim(),
-      name: form.name.trim(),
-      initials: form.initials.trim().toUpperCase(),
-      role: form.role.trim(),
-      tokens: Number(form.tokens),
-      university: form.university.trim(),
-      department: form.department.trim(),
-      bio: form.bio.trim(),
-      skills: form.skills,
-      completedProjects: Number(form.completedProjects),
-      joinDate: form.joinDate.trim(),
-    });
+    try {
+      await updateUserProfile({
+        id: form.id.trim(),
+        name: form.name.trim(),
+        initials: form.initials.trim().toUpperCase(),
+        role: form.role.trim(),
+        tokens: Number(form.tokens),
+        university: form.university.trim(),
+        department: form.department.trim(),
+        bio: form.bio.trim(),
+        skills: form.skills,
+        completedProjects: Number(form.completedProjects),
+        joinDate: form.joinDate.trim(),
+      });
+      setSaved(true);
+    } finally {
+      setSaving(false);
+    }
+  };
 
-    setSaving(false);
-    setSaved(true);
+  // Clears auth session data and returns user to the landing/login experience.
+  const handleLogout = () => {
+    clearStoredSession();
+    setTab('dashboard');
+    window.location.reload();
   };
 
   return (
@@ -259,6 +308,14 @@ export function UserProfile() {
               className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors cursor-pointer"
             >
               Back to Dashboard
+            </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="w-full px-4 py-2.5 rounded-xl border border-red-200 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors cursor-pointer flex items-center justify-center gap-2"
+            >
+              <LogOut size={14} />
+              Logout
             </button>
           </div>
         </aside>
@@ -362,51 +419,10 @@ export function UserProfile() {
               {errors.department && <p className="text-red-500 text-xs mt-1">{errors.department}</p>}
             </div>
 
-            <div>
-              <label className="flex items-center gap-1.5 text-sm font-semibold text-gray-700 mb-1.5">
-                <Trophy size={14} className="text-[#003D7A]" />
-                Completed Projects
-              </label>
-              <input
-                value={form.completedProjects}
-                onChange={(e) => updateField('completedProjects', e.target.value)}
-                className={INPUT_STYLES}
-                placeholder="0"
-                inputMode="numeric"
-              />
-              {errors.completedProjects && (
-                <p className="text-red-500 text-xs mt-1">{errors.completedProjects}</p>
-              )}
-            </div>
+            
 
-            <div>
-              <label className="flex items-center gap-1.5 text-sm font-semibold text-gray-700 mb-1.5">
-                <Calendar size={14} className="text-[#003D7A]" />
-                Join Date
-              </label>
-              <input
-                value={form.joinDate}
-                onChange={(e) => updateField('joinDate', e.target.value)}
-                className={INPUT_STYLES}
-                placeholder="September 2023"
-              />
-              {errors.joinDate && <p className="text-red-500 text-xs mt-1">{errors.joinDate}</p>}
-            </div>
+            
 
-            <div>
-              <label className="flex items-center gap-1.5 text-sm font-semibold text-gray-700 mb-1.5">
-                <Coins size={14} className="text-[#003D7A]" />
-                Token Balance
-              </label>
-              <input
-                value={form.tokens}
-                onChange={(e) => updateField('tokens', e.target.value)}
-                className={INPUT_STYLES}
-                placeholder="0"
-                inputMode="numeric"
-              />
-              {errors.tokens && <p className="text-red-500 text-xs mt-1">{errors.tokens}</p>}
-            </div>
           </div>
 
           <div>
@@ -424,7 +440,18 @@ export function UserProfile() {
               ) : (
                 <span />
               )}
-              <p className="text-xs text-gray-400">{form.bio.length} chars</p>
+              <div className="text-right">
+                <p className="text-xs text-gray-400">{form.bio.length} chars</p>
+                {bioSaveState === 'saving' && (
+                  <p className="text-[11px] text-[#003D7A]">Saving bio...</p>
+                )}
+                {bioSaveState === 'saved' && (
+                  <p className="text-[11px] text-emerald-600">Bio synced to database</p>
+                )}
+                {bioSaveState === 'error' && (
+                  <p className="text-[11px] text-red-500">{bioSaveError || 'Bio sync failed'}</p>
+                )}
+              </div>
             </div>
           </div>
 
