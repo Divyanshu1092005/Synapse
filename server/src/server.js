@@ -1,11 +1,12 @@
 import dotenv from 'dotenv';
+dotenv.config();
 import mongoose from 'mongoose';
 import app from './app.js';
 import cors from 'cors';
 
 
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: "*",
   credentials: true
 }));
 
